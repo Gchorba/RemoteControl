@@ -301,7 +301,7 @@
             debugInfo.textContent = `X: ${Math.round(normalizedX * 100)}% Y: ${Math.round(normalizedY * 100)}%`;
             
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
+                const data = {
                     type: eventType,
                     x: normalizedX,
                     y: normalizedY,
@@ -309,7 +309,14 @@
                     isDragging: isDrag,
                     sessionId: sessionId,
                     timestamp: now
-                }));
+                };
+                
+                try {
+                    ws.send(JSON.stringify(data));
+                    console.log('Sent input:', data); // Debug log
+                } catch (e) {
+                    console.error('Error sending input:', e);
+                }
             }
         }
 

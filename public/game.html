@@ -309,19 +309,33 @@
                 showError('Connection error occurred');
             };
 
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                
-                if (data.type === 'registered') {
-                    status.textContent = `Connected to session ${data.sessionId}`;
-                    status.style.background = 'rgba(0,255,0,0.8)';
-                } else if (data.type === 'session_status') {
-                    sessionInfo.textContent = 
-                        `Session: ${data.sessionId}\n` +
-                        `Controllers: ${data.controllers}`;
-                    updateStats();
-                } else {
-                    handleControllerInput(data);
+            ws.onmessage = async (event) => {
+                try {
+                    let data;
+                    if (event.data instanceof Blob) {
+                        // Handle Blob data
+                        const text = await event.data.text();
+                        data = JSON.parse(text);
+                    } else {
+                        // Handle string data
+                        data = JSON.parse(event.data);
+                    }
+                    
+                    console.log('Received message:', data); // Debug log
+                    
+                    if (data.type === 'registered') {
+                        status.textContent = `Connected to session ${data.sessionId}`;
+                        status.style.background = 'rgba(0,255,0,0.8)';
+                    } else if (data.type === 'session_status') {
+                        sessionInfo.textContent = 
+                            `Session: ${data.sessionId}\n` +
+                            `Controllers: ${data.controllers}`;
+                        updateStats();
+                    } else {
+                        handleControllerInput(data);
+                    }
+                } catch (e) {
+                    console.error('Error processing message:', e, 'Raw data:', event.data);
                 }
             };
         }
@@ -353,8 +367,10 @@
         }
 
         function handleControllerInput(data) {
+            console.log('Processing input:', data); // Debug log
+            
             const now = Date.now();
-            const latency = now - data.timestamp;
+            const latency = now - (data.timestamp || now);
             
             // Update performance metrics
             updateCount++;
