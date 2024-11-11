@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Touch/Mouse Controller Demo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+        }
+
+        body {
+            min-height: 100vh;
+            background: linear-gradient(135deg, #1a1a1a 0%, #0a0a0a 100%);
+            color: white;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            color: #fff;
+        }
+
+        .subtitle {
+            color: #aaa;
+            font-size: 1.1em;
+        }
+
+        .buttons {
+            display: grid;
+            gap: 20px;
+            margin: 40px 0;
+        }
+
+        @media (min-width: 600px) {
+            .buttons {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        .button {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 30px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            text-decoration: none;
+            color: white;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+
+        .button:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .button-title {
+            font-size: 1.5em;
+            margin-bottom: 10px;
+        }
+
+        .button-description {
+            color: #aaa;
+            font-size: 0.9em;
+            line-height: 1.4;
+        }
+
+        .icon {
+            font-size: 2em;
+            margin-bottom: 15px;
+        }
+
+        .instructions {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 40px;
+        }
+
+        .instructions h2 {
+            margin-bottom: 15px;
+            color: #fff;
+        }
+
+        .instructions ul {
+            list-style-position: inside;
+            color: #aaa;
+        }
+
+        .instructions li {
+            margin-bottom: 10px;
+        }
+
+        .device-tag {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
+        .desktop {
+            background: #4CAF50;
+        }
+
+        .mobile {
+            background: #2196F3;
+        }
+
+        #qrCode {
+            display: none;
+            margin: 20px auto;
+            padding: 15px;
+            background: white;
+            border-radius: 10px;
+            width: fit-content;
+        }
+
+        @media (max-width: 600px) {
+            .header {
+                padding: 15px;
+            }
+
+            h1 {
+                font-size: 2em;
+            }
+
+            .button {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Touch/Mouse Controller Demo</h1>
+            <p class="subtitle">Control the game using touch or mouse input</p>
+        </div>
+
+        <div class="buttons">
+            <a href="/game.html" class="button" id="gameButton" target="_blank">
+                <div class="icon">🎮</div>
+                <div class="button-title">Open Game</div>
+                <div class="button-description">
+                    Open the game window 
+                    <span class="device-tag desktop">Desktop</span>
+                </div>
+            </a>
+
+            <a href="/controller.html" class="button" id="controllerButton" target="_blank">
+                <div class="icon">🎯</div>
+                <div class="button-title">Open Controller</div>
+                <div class="button-description">
+                    Open the touch/mouse controller 
+                    <span class="device-tag mobile">Mobile</span>
+                </div>
+            </a>
+        </div>
+
+        <div class="instructions">
+            <h2>How to Use</h2>
+            <ul>
+                <li>Open the Game window on your desktop/laptop</li>
+                <li>Open the Controller on your mobile device or another window</li>
+                <li>Use touch or mouse to control the game:</li>
+                <ul style="margin-left: 20px; margin-top: 5px;">
+                    <li>Click and drag to move</li>
+                    <li>Touch and drag for mobile control</li>
+                    <li>Watch the visual feedback and trails</li>
+                </ul>
+            </ul>
+        </div>
+
+        <div id="qrCode"></div>
+    </div>
+
+    <script>
+        // Get the current URL
+        const currentUrl = window.location.href;
+        const status = document.createElement('div');
+        status.style.textAlign = 'center';
+        status.style.marginTop = '20px';
+        status.style.color = '#aaa';
+        
+        // Add the URL to the page
+        status.textContent = `Server URL: ${currentUrl}`;
+        document.querySelector('.container').appendChild(status);
+
+        // Check if it's a mobile device
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        
+        // Adjust button behaviors based on device
+        if (isMobile) {
+            document.getElementById('controllerButton').click();
+        }
+
+        // Add click handlers
+        document.getElementById('gameButton').addEventListener('click', () => {
+            localStorage.setItem('role', 'game');
+        });
+
+        document.getElementById('controllerButton').addEventListener('click', () => {
+            localStorage.setItem('role', 'controller');
+        });
+    </script>
+</body>
+</html>

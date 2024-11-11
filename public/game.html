@@ -1,0 +1,187 @@
+<!-- public/game.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Game</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { margin: 0; overflow: hidden; background: #222; }
+        #game-canvas {
+            width: 100vw;
+            height: 100vh;
+            background: #000;
+        }
+        #player {
+            width: 50px;
+            height: 50px;
+            background: #ff0000;
+            position: absolute;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            transition: all 0.1s ease;
+            pointer-events: none;
+        }
+        #status {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            z-index: 1000;
+        }
+        .trail {
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            background: rgba(255, 0, 0, 0.3);
+            border-radius: 50%;
+            pointer-events: none;
+            transition: all 0.3s ease;
+        }
+        #drag-line {
+            position: absolute;
+            pointer-events: none;
+            z-index: 999;
+            height: 2px;
+            background: rgba(255, 0, 0, 0.5);
+            transform-origin: left center;
+            display: none;
+        }
+        .dragging #player {
+            box-shadow: 0 0 20px rgba(255, 0, 0, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <div id="status">Connecting...</div>
+    <div id="game-canvas">
+        <div id="player"></div>
+        <div id="drag-line"></div>
+    </div>
+    <script>
+        const status = document.getElementById('status');
+        const player = document.getElementById('player');
+        const canvas = document.getElementById('game-canvas');
+        const dragLine = document.getElementById('drag-line');
+        let lastX = 0, lastY = 0;
+        let isDragging = false;
+        
+        const ws = new WebSocket(`ws://${window.location.host}`);
+        
+        ws.onopen = () => {
+            status.textContent = 'Connected';
+            status.style.background = 'rgba(0,255,0,0.5)';
+        };
+        
+        ws.onclose = () => {
+            status.textContent = 'Disconnected';
+            status.style.background = 'rgba(255,0,0,0.5)';
+        };
+
+        function createTrail(x, y) {
+            const trail = document.createElement('div');
+            trail.className = 'trail';
+            trail.style.left = x + 'px';
+            trail.style.top = y + 'px';
+            canvas.appendChild(trail);
+            
+            setTimeout(() => {
+                trail.style.opacity = '0';
+                setTimeout(() => trail.remove(), 300);
+            }, 100);
+        }
+
+        function updateDragLine(x1, y1, x2, y2) {
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const angle = Math.atan2(dy, dx);
+            
+            dragLine.style.display = 'block';
+            dragLine.style.left = x1 + 'px';
+            dragLine.style.top = y1 + 'px';
+            dragLine.style.width = distance + 'px';
+            dragLine.style.transform = `rotate(${angle}rad)`;
+        }
+        
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'touchend' || data.type === 'mouseup') {
+                isDragging = false;
+                dragLine.style.display = 'none';
+                document.body.classList.remove('dragging');
+                status.textContent = 'Input ended';
+                return;
+            }
+            
+            isDragging = data.isDragging;
+            document.body.classList.toggle('dragging', isDragging);
+            
+            const x = data.x * canvas.clientWidth;
+            const y = data.y * canvas.clientHeight;
+            
+            // Update player position
+            player.style.left = x + 'px';
+            player.style.top = y + 'px';
+            
+            // Create trail effect
+            if (isDragging) {
+                createTrail(x, y);
+                updateDragLine(lastX || x, lastY || y, x, y);
+            }
+            
+            lastX = x;
+            lastY = y;
+            
+            // Update status
+            status.textContent = `${data.inputType.toUpperCase()}: X: ${Math.round(x)}, Y: ${Math.round(y)} ${isDragging ? '(Dragging)' : ''}`;
+        };
+
+        // Optional: Local drag handling for testing
+        canvas.addEventListener('mousedown', (e) => {
+            const startDrag = (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                player.style.left = x + 'px';
+                player.style.top = y + 'px';
+                createTrail(x, y);
+                
+                if (isDragging) {
+                    updateDragLine(lastX || x, lastY || y, x, y);
+                }
+                
+                lastX = x;
+                lastY = y;
+            };
+            
+            isDragging = true;
+            document.body.classList.add('dragging');
+            
+            const handleMouseMove = (e) => {
+                if (isDragging) {
+                    startDrag(e);
+                }
+            };
+            
+            const handleMouseUp = () => {
+                isDragging = false;
+                dragLine.style.display = 'none';
+                document.body.classList.remove('dragging');
+                window.removeEventListener('mousemove', handleMouseMove);
+                window.removeEventListener('mouseup', handleMouseUp);
+            };
+            
+            window.addEventListener('mousemove', handleMouseMove);
+            window.addEventListener('mouseup', handleMouseUp);
+            
+            startDrag(e);
+        });
+    </script>
+</body>
+</html>

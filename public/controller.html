@@ -1,0 +1,170 @@
+<!-- public/controller.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Touch/Mouse Controller</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <style>
+        body { margin: 0; overflow: hidden; }
+        #touchpad {
+            width: 100vw;
+            height: 100vh;
+            background: linear-gradient(135deg, #f0f0f0 0%, #e0e0e0 100%);
+            touch-action: none;
+            cursor: grab;
+        }
+        #touchpad.dragging {
+            cursor: grabbing;
+            background: linear-gradient(135deg, #e0e0e0 0%, #d0d0d0 100%);
+        }
+        #status {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            z-index: 1000;
+        }
+        #input-point {
+            width: 40px;
+            height: 40px;
+            position: fixed;
+            pointer-events: none;
+            display: none;
+            z-index: 1000;
+        }
+        .cursor-ring {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border: 3px solid rgba(255, 0, 0, 0.8);
+            border-radius: 50%;
+            animation: pulse 1.5s infinite;
+        }
+        .cursor-dot {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: red;
+            border-radius: 50%;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            100% { transform: scale(1.5); opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div id="status">Connecting...</div>
+    <div id="input-point">
+        <div class="cursor-ring"></div>
+        <div class="cursor-dot"></div>
+    </div>
+    <div id="touchpad"></div>
+    <script>
+        const status = document.getElementById('status');
+        const touchpad = document.getElementById('touchpad');
+        const inputPoint = document.getElementById('input-point');
+        let isDragging = false;
+        let isTouch = false;
+        
+        const ws = new WebSocket(`ws://${window.location.host}`);
+        
+        ws.onopen = () => {
+            status.textContent = 'Connected - Click and drag or touch to control';
+            status.style.background = 'rgba(0,255,0,0.5)';
+        };
+        
+        ws.onclose = () => {
+            status.textContent = 'Disconnected';
+            status.style.background = 'rgba(255,0,0,0.5)';
+        };
+
+        function sendInputData(eventType, x, y, isDrag = false) {
+            const rect = touchpad.getBoundingClientRect();
+            
+            // Show input point
+            inputPoint.style.display = 'block';
+            inputPoint.style.left = (x - 20) + 'px';
+            inputPoint.style.top = (y - 20) + 'px';
+            
+            // Send normalized coordinates
+            const data = {
+                type: eventType,
+                x: (x - rect.left) / rect.width,
+                y: (y - rect.top) / rect.height,
+                inputType: isTouch ? 'touch' : 'mouse',
+                isDragging: isDrag
+            };
+            
+            ws.send(JSON.stringify(data));
+        }
+
+        // Touch event handlers
+        function handleTouch(event) {
+            event.preventDefault();
+            isTouch = true;
+            const touch = event.touches[0];
+            sendInputData(event.type, touch.clientX, touch.clientY, true);
+        }
+
+        touchpad.addEventListener('touchstart', (e) => {
+            handleTouch(e);
+            touchpad.classList.add('dragging');
+        });
+        
+        touchpad.addEventListener('touchmove', handleTouch);
+        
+        touchpad.addEventListener('touchend', () => {
+            isTouch = false;
+            inputPoint.style.display = 'none';
+            touchpad.classList.remove('dragging');
+            ws.send(JSON.stringify({ 
+                type: 'touchend',
+                inputType: 'touch',
+                isDragging: false
+            }));
+        });
+
+        // Mouse event handlers
+        touchpad.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            isTouch = false;
+            touchpad.classList.add('dragging');
+            sendInputData('mousedown', e.clientX, e.clientY, true);
+            
+            const handleMouseMove = (e) => {
+                if (isDragging) {
+                    sendInputData('mousemove', e.clientX, e.clientY, true);
+                }
+            };
+            
+            const handleMouseUp = (e) => {
+                isDragging = false;
+                touchpad.classList.remove('dragging');
+                inputPoint.style.display = 'none';
+                ws.send(JSON.stringify({ 
+                    type: 'mouseup',
+                    inputType: 'mouse',
+                    isDragging: false
+                }));
+                
+                window.removeEventListener('mousemove', handleMouseMove);
+                window.removeEventListener('mouseup', handleMouseUp);
+            };
+            
+            window.addEventListener('mousemove', handleMouseMove);
+            window.addEventListener('mouseup', handleMouseUp);
+        });
+
+        // Prevent context menu
+        touchpad.addEventListener('contextmenu', (e) => e.preventDefault());
+    </script>
+</body>
+</html>
