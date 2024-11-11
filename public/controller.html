@@ -1,11 +1,14 @@
-<!-- public/controller.html -->
 <!DOCTYPE html>
 <html>
 <head>
     <title>Touch/Mouse Controller</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <style>
-        body { margin: 0; overflow: hidden; }
+        body { 
+            margin: 0; 
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
         #touchpad {
             width: 100vw;
             height: 100vh;
@@ -23,10 +26,11 @@
             left: 10px;
             background: rgba(0,0,0,0.5);
             color: white;
-            padding: 5px 10px;
+            padding: 10px 15px;
             border-radius: 5px;
             font-family: monospace;
             z-index: 1000;
+            transition: all 0.3s ease;
         }
         #input-point {
             width: 40px;
@@ -58,6 +62,18 @@
             0% { transform: scale(1); opacity: 1; }
             100% { transform: scale(1.5); opacity: 0; }
         }
+        .debug-info {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            font-family: monospace;
+            z-index: 1000;
+        }
     </style>
 </head>
 <body>
@@ -67,26 +83,68 @@
         <div class="cursor-dot"></div>
     </div>
     <div id="touchpad"></div>
+    <div class="debug-info"></div>
+
     <script>
         const status = document.getElementById('status');
         const touchpad = document.getElementById('touchpad');
         const inputPoint = document.getElementById('input-point');
+        const debugInfo = document.querySelector('.debug-info');
         let isDragging = false;
         let isTouch = false;
-        
-        const ws = new WebSocket(`ws://${window.location.host}`);
-        
-        ws.onopen = () => {
-            status.textContent = 'Connected - Click and drag or touch to control';
-            status.style.background = 'rgba(0,255,0,0.5)';
-        };
-        
-        ws.onclose = () => {
-            status.textContent = 'Disconnected';
-            status.style.background = 'rgba(255,0,0,0.5)';
-        };
+        let lastSentTime = 0;
+        const THROTTLE_MS = 16; // ~60fps
+
+        // WebSocket setup with auto-reconnect
+        function connectWebSocket() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${wsProtocol}//${window.location.host}`;
+            console.log('Connecting to:', wsUrl);
+            
+            const ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                console.log('WebSocket connected, registering as controller...');
+                ws.send(JSON.stringify({
+                    type: 'register',
+                    client: 'controller'
+                }));
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                status.textContent = 'Disconnected - Reconnecting...';
+                status.style.background = 'rgba(255,0,0,0.5)';
+                setTimeout(connectWebSocket, 3000);
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                status.textContent = 'Connection error!';
+                status.style.background = 'rgba(255,0,0,0.5)';
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'registered') {
+                    status.textContent = `Connected as controller #${data.id}`;
+                    status.style.background = 'rgba(0,255,0,0.5)';
+                } else if (data.type === 'stats') {
+                    status.textContent = `Connected - Controllers: ${data.controllers}, Games: ${data.games}`;
+                }
+            };
+
+            return ws;
+        }
+
+        const ws = connectWebSocket();
 
         function sendInputData(eventType, x, y, isDrag = false) {
+            const now = Date.now();
+            if (now - lastSentTime < THROTTLE_MS) return;
+            lastSentTime = now;
+
             const rect = touchpad.getBoundingClientRect();
             
             // Show input point
@@ -94,16 +152,26 @@
             inputPoint.style.left = (x - 20) + 'px';
             inputPoint.style.top = (y - 20) + 'px';
             
-            // Send normalized coordinates
+            // Normalized coordinates
+            const normalizedX = (x - rect.left) / rect.width;
+            const normalizedY = (y - rect.top) / rect.height;
+            
+            // Update debug info
+            debugInfo.textContent = `X: ${Math.round(normalizedX * 100)}% Y: ${Math.round(normalizedY * 100)}%`;
+            
+            // Send data
             const data = {
                 type: eventType,
-                x: (x - rect.left) / rect.width,
-                y: (y - rect.top) / rect.height,
+                x: normalizedX,
+                y: normalizedY,
                 inputType: isTouch ? 'touch' : 'mouse',
-                isDragging: isDrag
+                isDragging: isDrag,
+                timestamp: Date.now()
             };
             
-            ws.send(JSON.stringify(data));
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(data));
+            }
         }
 
         // Touch event handlers
@@ -121,15 +189,21 @@
         
         touchpad.addEventListener('touchmove', handleTouch);
         
-        touchpad.addEventListener('touchend', () => {
+        touchpad.addEventListener('touchend', (e) => {
+            e.preventDefault();
             isTouch = false;
             inputPoint.style.display = 'none';
             touchpad.classList.remove('dragging');
-            ws.send(JSON.stringify({ 
-                type: 'touchend',
-                inputType: 'touch',
-                isDragging: false
-            }));
+            debugInfo.textContent = '';
+            
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'touchend',
+                    inputType: 'touch',
+                    isDragging: false,
+                    timestamp: Date.now()
+                }));
+            }
         });
 
         // Mouse event handlers
@@ -147,13 +221,19 @@
             
             const handleMouseUp = (e) => {
                 isDragging = false;
+                isTouch = false;
                 touchpad.classList.remove('dragging');
                 inputPoint.style.display = 'none';
-                ws.send(JSON.stringify({ 
-                    type: 'mouseup',
-                    inputType: 'mouse',
-                    isDragging: false
-                }));
+                debugInfo.textContent = '';
+                
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'mouseup',
+                        inputType: 'mouse',
+                        isDragging: false,
+                        timestamp: Date.now()
+                    }));
+                }
                 
                 window.removeEventListener('mousemove', handleMouseMove);
                 window.removeEventListener('mouseup', handleMouseUp);
@@ -165,6 +245,15 @@
 
         // Prevent context menu
         touchpad.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        // Handle visibility change
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                isDragging = false;
+                touchpad.classList.remove('dragging');
+                inputPoint.style.display = 'none';
+            }
+        });
     </script>
 </body>
 </html>

@@ -1,15 +1,21 @@
-<!-- public/game.html -->
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Test Game</title>
+    <title>Game Display</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        body { margin: 0; overflow: hidden; background: #222; }
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background: #222;
+            font-family: Arial, sans-serif;
+        }
         #game-canvas {
             width: 100vw;
             height: 100vh;
             background: #000;
+            position: relative;
+            overflow: hidden;
         }
         #player {
             width: 50px;
@@ -20,17 +26,19 @@
             transform: translate(-50%, -50%);
             transition: all 0.1s ease;
             pointer-events: none;
+            box-shadow: 0 0 20px rgba(255, 0, 0, 0.3);
         }
         #status {
             position: fixed;
             top: 10px;
             left: 10px;
-            background: rgba(0,0,0,0.5);
+            background: rgba(0,0,0,0.7);
             color: white;
-            padding: 5px 10px;
+            padding: 10px 15px;
             border-radius: 5px;
             font-family: monospace;
             z-index: 1000;
+            transition: all 0.3s ease;
         }
         .trail {
             position: absolute;
@@ -51,7 +59,34 @@
             display: none;
         }
         .dragging #player {
-            box-shadow: 0 0 20px rgba(255, 0, 0, 0.5);
+            box-shadow: 0 0 30px rgba(255, 0, 0, 0.5);
+        }
+        .debug-info {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            font-family: monospace;
+            z-index: 1000;
+        }
+        .connection-indicator {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            z-index: 1000;
+        }
+        @keyframes fadeOut {
+            from { opacity: 1; }
+            to { opacity: 0; }
         }
     </style>
 </head>
@@ -61,25 +96,74 @@
         <div id="player"></div>
         <div id="drag-line"></div>
     </div>
+    <div class="debug-info"></div>
+    <div class="connection-indicator"></div>
+
     <script>
         const status = document.getElementById('status');
         const player = document.getElementById('player');
         const canvas = document.getElementById('game-canvas');
         const dragLine = document.getElementById('drag-line');
+        const debugInfo = document.querySelector('.debug-info');
+        const connectionIndicator = document.querySelector('.connection-indicator');
         let lastX = 0, lastY = 0;
         let isDragging = false;
-        
-        const ws = new WebSocket(`ws://${window.location.host}`);
-        
-        ws.onopen = () => {
-            status.textContent = 'Connected';
-            status.style.background = 'rgba(0,255,0,0.5)';
-        };
-        
-        ws.onclose = () => {
-            status.textContent = 'Disconnected';
-            status.style.background = 'rgba(255,0,0,0.5)';
-        };
+        let lastUpdateTime = 0;
+
+        // WebSocket Connection
+        function connectWebSocket() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${wsProtocol}//${window.location.host}`;
+            console.log('Connecting to:', wsUrl);
+            
+            const ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                console.log('WebSocket connected, registering as game...');
+                status.textContent = 'Connected';
+                status.style.background = 'rgba(0,255,0,0.7)';
+                
+                ws.send(JSON.stringify({
+                    type: 'register',
+                    client: 'game'
+                }));
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                status.textContent = 'Disconnected - Reconnecting...';
+                status.style.background = 'rgba(255,0,0,0.7)';
+                setTimeout(connectWebSocket, 3000);
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                status.textContent = 'Connection error!';
+                status.style.background = 'rgba(255,0,0,0.7)';
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    if (data.type === 'registered') {
+                        status.textContent = `Connected as game #${data.id}`;
+                        status.style.background = 'rgba(0,255,0,0.7)';
+                    } else if (data.type === 'stats') {
+                        connectionIndicator.textContent = 
+                            `👾 Games: ${data.games} 🎮 Controllers: ${data.controllers}`;
+                    } else {
+                        handleControllerInput(data);
+                    }
+                } catch (e) {
+                    console.error('Error handling message:', e);
+                }
+            };
+
+            return ws;
+        }
+
+        const ws = connectWebSocket();
 
         function createTrail(x, y) {
             const trail = document.createElement('div');
@@ -106,15 +190,19 @@
             dragLine.style.width = distance + 'px';
             dragLine.style.transform = `rotate(${angle}rad)`;
         }
-        
-        ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
+
+        function handleControllerInput(data) {
+            // Update debug info
+            const now = Date.now();
+            const timeSinceLastUpdate = now - lastUpdateTime;
+            lastUpdateTime = now;
+            
+            debugInfo.textContent = `Input: ${data.inputType} | Latency: ${timeSinceLastUpdate}ms`;
             
             if (data.type === 'touchend' || data.type === 'mouseup') {
                 isDragging = false;
                 dragLine.style.display = 'none';
                 document.body.classList.remove('dragging');
-                status.textContent = 'Input ended';
                 return;
             }
             
@@ -131,56 +219,42 @@
             // Create trail effect
             if (isDragging) {
                 createTrail(x, y);
-                updateDragLine(lastX || x, lastY || y, x, y);
+                if (lastX && lastY) {
+                    updateDragLine(lastX, lastY, x, y);
+                }
             }
             
             lastX = x;
             lastY = y;
-            
-            // Update status
-            status.textContent = `${data.inputType.toUpperCase()}: X: ${Math.round(x)}, Y: ${Math.round(y)} ${isDragging ? '(Dragging)' : ''}`;
-        };
+        }
 
-        // Optional: Local drag handling for testing
-        canvas.addEventListener('mousedown', (e) => {
-            const startDrag = (e) => {
-                const rect = canvas.getBoundingClientRect();
-                const x = e.clientX - rect.left;
-                const y = e.clientY - rect.top;
-                
-                player.style.left = x + 'px';
-                player.style.top = y + 'px';
-                createTrail(x, y);
-                
-                if (isDragging) {
-                    updateDragLine(lastX || x, lastY || y, x, y);
-                }
-                
-                lastX = x;
-                lastY = y;
-            };
-            
-            isDragging = true;
-            document.body.classList.add('dragging');
-            
-            const handleMouseMove = (e) => {
-                if (isDragging) {
-                    startDrag(e);
-                }
-            };
-            
-            const handleMouseUp = () => {
+        // Optional: Handle window resize
+        window.addEventListener('resize', () => {
+            // Reset positions when window is resized
+            lastX = 0;
+            lastY = 0;
+            dragLine.style.display = 'none';
+        });
+
+        // Clean up trails periodically
+        setInterval(() => {
+            const trails = document.querySelectorAll('.trail');
+            if (trails.length > 100) { // Limit maximum trails
+                trails.forEach((trail, index) => {
+                    if (index < trails.length - 100) {
+                        trail.remove();
+                    }
+                });
+            }
+        }, 5000);
+
+        // Handle visibility change
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
                 isDragging = false;
                 dragLine.style.display = 'none';
                 document.body.classList.remove('dragging');
-                window.removeEventListener('mousemove', handleMouseMove);
-                window.removeEventListener('mouseup', handleMouseUp);
-            };
-            
-            window.addEventListener('mousemove', handleMouseMove);
-            window.addEventListener('mouseup', handleMouseUp);
-            
-            startDrag(e);
+            }
         });
     </script>
 </body>
