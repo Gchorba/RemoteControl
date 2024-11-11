@@ -4,19 +4,27 @@
     <title>Game Display</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: Arial, sans-serif;
+        }
+
         body { 
             margin: 0; 
             overflow: hidden; 
-            background: #222;
-            font-family: Arial, sans-serif;
+            background: #000;
         }
+
         #game-canvas {
             width: 100vw;
             height: 100vh;
-            background: #000;
+            background: linear-gradient(135deg, #0a0a0a 0%, #000000 100%);
             position: relative;
             overflow: hidden;
         }
+
         #player {
             width: 50px;
             height: 50px;
@@ -28,18 +36,21 @@
             pointer-events: none;
             box-shadow: 0 0 20px rgba(255, 0, 0, 0.3);
         }
+
         #status {
             position: fixed;
             top: 10px;
             left: 10px;
-            background: rgba(0,0,0,0.7);
+            background: rgba(0,0,0,0.8);
             color: white;
             padding: 10px 15px;
-            border-radius: 5px;
+            border-radius: 8px;
             font-family: monospace;
             z-index: 1000;
             transition: all 0.3s ease;
+            font-size: 14px;
         }
+
         .trail {
             position: absolute;
             width: 6px;
@@ -49,6 +60,7 @@
             pointer-events: none;
             transition: all 0.3s ease;
         }
+
         #drag-line {
             position: absolute;
             pointer-events: none;
@@ -57,113 +69,262 @@
             background: rgba(255, 0, 0, 0.5);
             transform-origin: left center;
             display: none;
+            box-shadow: 0 0 10px rgba(255, 0, 0, 0.3);
         }
+
         .dragging #player {
             box-shadow: 0 0 30px rgba(255, 0, 0, 0.5);
         }
+
         .debug-info {
             position: fixed;
             bottom: 10px;
             left: 10px;
-            background: rgba(0,0,0,0.7);
+            background: rgba(0,0,0,0.8);
             color: white;
-            padding: 5px 10px;
-            border-radius: 5px;
+            padding: 8px 12px;
+            border-radius: 8px;
             font-size: 12px;
             font-family: monospace;
             z-index: 1000;
         }
-        .connection-indicator {
+
+        .session-info {
             position: fixed;
             top: 10px;
             right: 10px;
-            padding: 5px 10px;
-            border-radius: 5px;
-            font-family: monospace;
-            background: rgba(0,0,0,0.7);
+            background: rgba(0,0,0,0.8);
             color: white;
+            padding: 10px;
+            border-radius: 8px;
+            font-family: monospace;
+            z-index: 1000;
+            text-align: right;
+        }
+
+        .qr-container {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
             z-index: 1000;
         }
-        @keyframes fadeOut {
-            from { opacity: 1; }
-            to { opacity: 0; }
+
+        .qr-code {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        #copy-url {
+            padding: 8px 16px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        #copy-url:hover {
+            background: #1976D2;
+        }
+
+        .copied {
+            background: #4CAF50 !important;
+        }
+
+        .session-error {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255,0,0,0.9);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            display: none;
+            z-index: 2000;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        }
+
+        .stats {
+            position: fixed;
+            top: 50px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-family: monospace;
+            z-index: 1000;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 0.8; }
+            50% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(1); opacity: 0.8; }
+        }
+
+        .reconnecting {
+            animation: pulse 1s infinite;
         }
     </style>
 </head>
 <body>
-    <div id="status">Connecting...</div>
+    <div id="status">Initializing...</div>
     <div id="game-canvas">
         <div id="player"></div>
         <div id="drag-line"></div>
     </div>
+    <div class="session-info"></div>
     <div class="debug-info"></div>
-    <div class="connection-indicator"></div>
+    <div class="stats"></div>
+    <div class="session-error"></div>
+    <div class="qr-container">
+        <div class="qr-code"></div>
+        <button id="copy-url">Copy Controller URL</button>
+    </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script>
         const status = document.getElementById('status');
         const player = document.getElementById('player');
         const canvas = document.getElementById('game-canvas');
         const dragLine = document.getElementById('drag-line');
+        const sessionInfo = document.querySelector('.session-info');
         const debugInfo = document.querySelector('.debug-info');
-        const connectionIndicator = document.querySelector('.connection-indicator');
+        const statsDisplay = document.querySelector('.stats');
+        const sessionError = document.querySelector('.session-error');
+        const copyButton = document.getElementById('copy-url');
+        
         let lastX = 0, lastY = 0;
         let isDragging = false;
-        let lastUpdateTime = 0;
+        let sessionId = null;
+        let ws = null;
+        let reconnectAttempts = 0;
+        const MAX_RECONNECT_ATTEMPTS = 5;
+        const RECONNECT_DELAY = 3000;
 
-        // WebSocket Connection
+        // Performance monitoring
+        let lastUpdateTime = Date.now();
+        let updateCount = 0;
+        let maxLatency = 0;
+        let totalLatency = 0;
+
+        // Initialize session
+        async function initializeSession() {
+            try {
+                const response = await fetch('/api/create-session', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                sessionId = data.sessionId;
+                
+                // Update URL with session ID
+                const newUrl = `${window.location.pathname}?session=${sessionId}`;
+                window.history.pushState({ sessionId }, '', newUrl);
+                
+                // Create controller URL and QR code
+                const controllerUrl = `${window.location.origin}/controller.html?session=${sessionId}`;
+                
+                new QRCode(document.querySelector('.qr-code'), {
+                    text: controllerUrl,
+                    width: 128,
+                    height: 128
+                });
+
+                // Setup copy button
+                copyButton.onclick = () => {
+                    navigator.clipboard.writeText(controllerUrl).then(() => {
+                        copyButton.classList.add('copied');
+                        copyButton.textContent = 'Copied!';
+                        setTimeout(() => {
+                            copyButton.classList.remove('copied');
+                            copyButton.textContent = 'Copy Controller URL';
+                        }, 1500);
+                    });
+                };
+
+                connectWebSocket();
+            } catch (error) {
+                console.error('Failed to create session:', error);
+                showError('Failed to create session');
+            }
+        }
+
+        function showError(message) {
+            sessionError.textContent = message;
+            sessionError.style.display = 'block';
+            status.textContent = 'Error: ' + message;
+            status.style.background = 'rgba(255,0,0,0.8)';
+        }
+
         function connectWebSocket() {
             const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${wsProtocol}//${window.location.host}`;
-            console.log('Connecting to:', wsUrl);
             
-            const ws = new WebSocket(wsUrl);
+            ws = new WebSocket(wsUrl);
             
             ws.onopen = () => {
                 console.log('WebSocket connected, registering as game...');
-                status.textContent = 'Connected';
-                status.style.background = 'rgba(0,255,0,0.7)';
+                reconnectAttempts = 0;
+                status.classList.remove('reconnecting');
                 
                 ws.send(JSON.stringify({
                     type: 'register',
-                    client: 'game'
+                    client: 'game',
+                    sessionId: sessionId
                 }));
             };
             
             ws.onclose = () => {
-                console.log('WebSocket disconnected');
-                status.textContent = 'Disconnected - Reconnecting...';
-                status.style.background = 'rgba(255,0,0,0.7)';
-                setTimeout(connectWebSocket, 3000);
+                if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    reconnectAttempts++;
+                    status.textContent = `Reconnecting (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`;
+                    status.classList.add('reconnecting');
+                    setTimeout(connectWebSocket, RECONNECT_DELAY);
+                } else {
+                    showError('Connection lost. Please refresh the page.');
+                }
             };
             
             ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
-                status.textContent = 'Connection error!';
-                status.style.background = 'rgba(255,0,0,0.7)';
+                showError('Connection error occurred');
             };
 
             ws.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    
-                    if (data.type === 'registered') {
-                        status.textContent = `Connected as game #${data.id}`;
-                        status.style.background = 'rgba(0,255,0,0.7)';
-                    } else if (data.type === 'stats') {
-                        connectionIndicator.textContent = 
-                            `👾 Games: ${data.games} 🎮 Controllers: ${data.controllers}`;
-                    } else {
-                        handleControllerInput(data);
-                    }
-                } catch (e) {
-                    console.error('Error handling message:', e);
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'registered') {
+                    status.textContent = `Connected to session ${data.sessionId}`;
+                    status.style.background = 'rgba(0,255,0,0.8)';
+                } else if (data.type === 'session_status') {
+                    sessionInfo.textContent = 
+                        `Session: ${data.sessionId}\n` +
+                        `Controllers: ${data.controllers}`;
+                    updateStats();
+                } else {
+                    handleControllerInput(data);
                 }
             };
-
-            return ws;
         }
-
-        const ws = connectWebSocket();
 
         function createTrail(x, y) {
             const trail = document.createElement('div');
@@ -192,13 +353,18 @@
         }
 
         function handleControllerInput(data) {
-            // Update debug info
             const now = Date.now();
-            const timeSinceLastUpdate = now - lastUpdateTime;
-            lastUpdateTime = now;
+            const latency = now - data.timestamp;
             
-            debugInfo.textContent = `Input: ${data.inputType} | Latency: ${timeSinceLastUpdate}ms`;
+            // Update performance metrics
+            updateCount++;
+            totalLatency += latency;
+            maxLatency = Math.max(maxLatency, latency);
             
+            debugInfo.textContent = 
+                `Input: ${data.inputType} | ` +
+                `Latency: ${latency}ms`;
+
             if (data.type === 'touchend' || data.type === 'mouseup') {
                 isDragging = false;
                 dragLine.style.display = 'none';
@@ -228,18 +394,30 @@
             lastY = y;
         }
 
-        // Optional: Handle window resize
-        window.addEventListener('resize', () => {
-            // Reset positions when window is resized
-            lastX = 0;
-            lastY = 0;
-            dragLine.style.display = 'none';
-        });
+        function updateStats() {
+            const now = Date.now();
+            const elapsed = (now - lastUpdateTime) / 1000;
+            const fps = updateCount / elapsed;
+            const avgLatency = updateCount > 0 ? totalLatency / updateCount : 0;
+            
+            statsDisplay.textContent = 
+                `FPS: ${fps.toFixed(1)} | ` +
+                `Avg Latency: ${avgLatency.toFixed(1)}ms | ` +
+                `Max Latency: ${maxLatency}ms`;
+            
+            // Reset metrics every second
+            if (elapsed >= 1) {
+                lastUpdateTime = now;
+                updateCount = 0;
+                totalLatency = 0;
+                maxLatency = 0;
+            }
+        }
 
         // Clean up trails periodically
         setInterval(() => {
             const trails = document.querySelectorAll('.trail');
-            if (trails.length > 100) { // Limit maximum trails
+            if (trails.length > 100) {
                 trails.forEach((trail, index) => {
                     if (index < trails.length - 100) {
                         trail.remove();
@@ -248,14 +426,34 @@
             }
         }, 5000);
 
-        // Handle visibility change
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                isDragging = false;
-                dragLine.style.display = 'none';
-                document.body.classList.remove('dragging');
-            }
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            lastX = 0;
+            lastY = 0;
+            dragLine.style.display = 'none';
         });
+
+        // Check URL for existing session or create new one
+        const urlParams = new URLSearchParams(window.location.search);
+        const existingSessionId = urlParams.get('session');
+
+        if (existingSessionId) {
+            fetch(`/api/session/${existingSessionId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.exists) {
+                        sessionId = existingSessionId;
+                        connectWebSocket();
+                    } else {
+                        initializeSession();
+                    }
+                });
+        } else {
+            initializeSession();
+        }
+
+        // Update stats periodically
+        setInterval(updateStats, 1000);
     </script>
 </body>
 </html>

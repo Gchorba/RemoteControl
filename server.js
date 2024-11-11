@@ -1,182 +1,161 @@
 const WebSocket = require('ws');
 const express = require('express');
 const path = require('path');
+const crypto = require('crypto');
 
-// Express app setup
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Connection tracking with roles
-const connections = {
-    controllers: new Map(), // Store controller connections
-    games: new Map(),      // Store game connections
-    counter: 0
-};
+// Session management
+const sessions = new Map(); // Map of sessionId -> { games: Set, controllers: Set }
 
-// Middleware to log requests
-app.use((req, res, next) => {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-    next();
-});
+// Generate a random session ID
+function generateSessionId() {
+    return crypto.randomBytes(4).toString('hex');
+}
 
-// Serve static files from public directory
+// Session class to manage connections
+class Session {
+    constructor(id) {
+        this.id = id;
+        this.games = new Set();
+        this.controllers = new Set();
+        this.createdAt = Date.now();
+    }
+
+    addClient(ws, type) {
+        if (type === 'game') {
+            this.games.add(ws);
+        } else if (type === 'controller') {
+            this.controllers.add(ws);
+        }
+        this.broadcastStatus();
+    }
+
+    removeClient(ws) {
+        this.games.delete(ws);
+        this.controllers.delete(ws);
+        this.broadcastStatus();
+    }
+
+    broadcast(data, sender) {
+        // If sender is a controller, send to all games in this session
+        if (this.controllers.has(sender)) {
+            this.games.forEach(game => {
+                if (game.readyState === WebSocket.OPEN) {
+                    game.send(data);
+                }
+            });
+        }
+    }
+
+    broadcastStatus() {
+        const status = {
+            type: 'session_status',
+            sessionId: this.id,
+            games: this.games.size,
+            controllers: this.controllers.size,
+            timestamp: Date.now()
+        };
+
+        const message = JSON.stringify(status);
+        [...this.games, ...this.controllers].forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(message);
+            }
+        });
+    }
+
+    isEmpty() {
+        return this.games.size === 0 && this.controllers.size === 0;
+    }
+}
+
+// Middleware
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
 
-// Route handlers
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// Routes
+app.post('/api/create-session', (req, res) => {
+    const sessionId = generateSessionId();
+    sessions.set(sessionId, new Session(sessionId));
+    res.json({ sessionId });
 });
 
-app.get('/controller', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'controller.html'));
-});
-
-app.get('/game', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'game.html'));
+app.get('/api/session/:sessionId', (req, res) => {
+    const session = sessions.get(req.params.sessionId);
+    if (session) {
+        res.json({
+            exists: true,
+            games: session.games.size,
+            controllers: session.controllers.size
+        });
+    } else {
+        res.json({ exists: false });
+    }
 });
 
 // Create HTTP server
 const server = app.listen(port, '0.0.0.0', () => {
-    console.log(`${new Date().toISOString()} - Server running on port ${port}`);
+    console.log(`Server running on port ${port}`);
 });
 
-// WebSocket server setup
-const wss = new WebSocket.Server({ 
-    server,
-    clientTracking: true
-});
+// WebSocket server
+const wss = new WebSocket.Server({ server });
 
-// Broadcast to all game clients
-function broadcastToGames(data, senderId) {
-    connections.games.forEach((client, id) => {
-        if (client.readyState === WebSocket.OPEN) {
-            try {
-                client.send(JSON.stringify({
-                    ...JSON.parse(data),
-                    senderId,
-                    timestamp: Date.now()
-                }));
-            } catch (e) {
-                console.error(`Error broadcasting to game ${id}:`, e);
-            }
-        }
-    });
-}
-
-// Send connection statistics
-function broadcastStats() {
-    const stats = {
-        type: 'stats',
-        controllers: connections.controllers.size,
-        games: connections.games.size,
-        timestamp: Date.now()
-    };
-    
-    const message = JSON.stringify(stats);
-    
-    [...connections.controllers.values(), ...connections.games.values()].forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            try {
-                client.send(message);
-            } catch (e) {
-                console.error('Error sending stats:', e);
-            }
-        }
-    });
-}
-
-// Handle new WebSocket connection
 wss.on('connection', (ws, req) => {
-    const clientId = ++connections.counter;
-    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    
-    // Function to handle client registration
-    const registerClient = (type) => {
-        if (type === 'controller') {
-            connections.controllers.set(clientId, ws);
-            console.log(`Controller ${clientId} connected from ${clientIp}`);
-        } else if (type === 'game') {
-            connections.games.set(clientId, ws);
-            console.log(`Game ${clientId} connected from ${clientIp}`);
-        }
-        broadcastStats();
-    };
+    let session = null;
+    let clientType = null;
 
-    // Handle messages
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
-            
-            // Handle registration message
+
             if (data.type === 'register') {
-                registerClient(data.client);
-                ws.send(JSON.stringify({
-                    type: 'registered',
-                    id: clientId,
-                    client: data.client
-                }));
-                return;
+                // Handle registration with session
+                session = sessions.get(data.sessionId);
+                clientType = data.client;
+
+                if (session) {
+                    session.addClient(ws, clientType);
+                    ws.send(JSON.stringify({
+                        type: 'registered',
+                        sessionId: session.id,
+                        client: clientType
+                    }));
+                } else {
+                    ws.send(JSON.stringify({
+                        type: 'error',
+                        message: 'Invalid session'
+                    }));
+                }
+            } else if (session) {
+                // Handle regular messages within session
+                session.broadcast(message, ws);
             }
-            
-            // Handle controller input
-            if (connections.controllers.has(clientId)) {
-                broadcastToGames(message, clientId);
-            }
-            
         } catch (e) {
-            console.error(`Error handling message from client ${clientId}:`, e);
+            console.error('Message handling error:', e);
         }
     });
 
-    // Handle client disconnection
     ws.on('close', () => {
-        const wasController = connections.controllers.delete(clientId);
-        const wasGame = connections.games.delete(clientId);
-        
-        console.log(`Client ${clientId} disconnected (${wasController ? 'controller' : wasGame ? 'game' : 'unregistered'})`);
-        broadcastStats();
-    });
-
-    // Handle errors
-    ws.on('error', (error) => {
-        console.error(`WebSocket error for client ${clientId}:`, error);
-        try {
-            ws.close();
-        } catch (e) {
-            console.error(`Error closing connection for client ${clientId}:`, e);
+        if (session) {
+            session.removeClient(ws);
+            if (session.isEmpty()) {
+                sessions.delete(session.id);
+                console.log(`Session ${session.id} removed`);
+            }
         }
     });
-
-    // Send initial welcome message
-    ws.send(JSON.stringify({
-        type: 'welcome',
-        message: 'Please register as either a controller or game',
-        timestamp: Date.now()
-    }));
 });
 
-// Handle server shutdown
-process.on('SIGTERM', () => {
-    console.log('SIGTERM received. Closing server...');
-    wss.close(() => {
-        console.log('WebSocket server closed');
-        server.close(() => {
-            console.log('HTTP server closed');
-            process.exit(0);
-        });
-    });
-});
-
-// Error handling
-process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
-    wss.close(() => {
-        server.close(() => {
-            process.exit(1);
-        });
-    });
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
+// Clean up old sessions periodically
+setInterval(() => {
+    const now = Date.now();
+    for (const [id, session] of sessions.entries()) {
+        if (session.isEmpty() && now - session.createdAt > 3600000) { // 1 hour
+            sessions.delete(id);
+            console.log(`Cleaned up inactive session ${id}`);
+        }
+    }
+}, 300000); // Every 5 minutes

@@ -4,42 +4,64 @@
     <title>Touch/Mouse Controller</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
         body { 
             margin: 0; 
             overflow: hidden;
             font-family: Arial, sans-serif;
+            background: #000;
         }
+
         #touchpad {
             width: 100vw;
             height: 100vh;
-            background: linear-gradient(135deg, #f0f0f0 0%, #e0e0e0 100%);
+            background: linear-gradient(135deg, #1a1a1a 0%, #0a0a0a 100%);
             touch-action: none;
             cursor: grab;
+            position: relative;
+            overflow: hidden;
         }
+
         #touchpad.dragging {
             cursor: grabbing;
-            background: linear-gradient(135deg, #e0e0e0 0%, #d0d0d0 100%);
+            background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
         }
+
         #status {
             position: fixed;
             top: 10px;
             left: 10px;
-            background: rgba(0,0,0,0.5);
+            background: rgba(0,0,0,0.8);
             color: white;
             padding: 10px 15px;
-            border-radius: 5px;
+            border-radius: 8px;
             font-family: monospace;
             z-index: 1000;
             transition: all 0.3s ease;
+            font-size: 14px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            max-width: 80%;
+            word-wrap: break-word;
         }
+
         #input-point {
-            width: 40px;
-            height: 40px;
+            width: 60px;
+            height: 60px;
             position: fixed;
             pointer-events: none;
             display: none;
             z-index: 1000;
+            transform: translate(-50%, -50%);
         }
+
         .cursor-ring {
             position: absolute;
             width: 100%;
@@ -48,97 +70,216 @@
             border-radius: 50%;
             animation: pulse 1.5s infinite;
         }
+
         .cursor-dot {
             position: absolute;
-            width: 10px;
-            height: 10px;
+            width: 12px;
+            height: 12px;
             background: red;
             border-radius: 50%;
             left: 50%;
             top: 50%;
             transform: translate(-50%, -50%);
+            box-shadow: 0 0 10px rgba(255,0,0,0.5);
         }
-        @keyframes pulse {
-            0% { transform: scale(1); opacity: 1; }
-            100% { transform: scale(1.5); opacity: 0; }
+
+        .session-info {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 10px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 12px;
+            z-index: 1000;
         }
+
         .debug-info {
             position: fixed;
             bottom: 10px;
             left: 10px;
-            background: rgba(0,0,0,0.5);
+            background: rgba(0,0,0,0.8);
             color: white;
-            padding: 5px 10px;
-            border-radius: 5px;
+            padding: 8px 12px;
+            border-radius: 8px;
             font-size: 12px;
             font-family: monospace;
             z-index: 1000;
+            transition: all 0.3s ease;
+        }
+
+        .session-error {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255,0,0,0.9);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            display: none;
+            z-index: 2000;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            max-width: 80%;
+        }
+
+        .reconnecting {
+            animation: blink 1s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            100% { transform: scale(1.5); opacity: 0; }
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .ripple {
+            position: absolute;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.1);
+            transform: scale(0);
+            animation: ripple 0.8s linear;
+            pointer-events: none;
+        }
+
+        @keyframes ripple {
+            to {
+                transform: scale(4);
+                opacity: 0;
+            }
         }
     </style>
 </head>
 <body>
-    <div id="status">Connecting...</div>
+    <div id="status">Initializing...</div>
     <div id="input-point">
         <div class="cursor-ring"></div>
         <div class="cursor-dot"></div>
     </div>
     <div id="touchpad"></div>
+    <div class="session-info"></div>
     <div class="debug-info"></div>
+    <div class="session-error"></div>
 
     <script>
         const status = document.getElementById('status');
         const touchpad = document.getElementById('touchpad');
         const inputPoint = document.getElementById('input-point');
+        const sessionInfo = document.querySelector('.session-info');
         const debugInfo = document.querySelector('.debug-info');
+        const sessionError = document.querySelector('.session-error');
+        
         let isDragging = false;
         let isTouch = false;
         let lastSentTime = 0;
-        const THROTTLE_MS = 16; // ~60fps
+        let reconnectAttempts = 0;
+        let ws = null;
+        
+        // Get session ID from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const sessionId = urlParams.get('session');
 
-        // WebSocket setup with auto-reconnect
+        // Throttle settings
+        const THROTTLE_MS = 16; // ~60fps
+        const MAX_RECONNECT_ATTEMPTS = 5;
+        const RECONNECT_DELAY = 3000;
+
+        // Verify session and connect
+        async function initializeController() {
+            if (!sessionId) {
+                showError('No session ID provided');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/session/${sessionId}`);
+                const data = await response.json();
+                
+                if (!data.exists) {
+                    showError('Invalid or expired session');
+                    return;
+                }
+
+                connectWebSocket();
+            } catch (error) {
+                showError('Failed to connect to session');
+                console.error('Session verification failed:', error);
+            }
+        }
+
+        function showError(message) {
+            sessionError.textContent = message;
+            sessionError.style.display = 'block';
+            status.textContent = 'Error: ' + message;
+            status.style.background = 'rgba(255,0,0,0.8)';
+        }
+
         function connectWebSocket() {
             const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${wsProtocol}//${window.location.host}`;
-            console.log('Connecting to:', wsUrl);
             
-            const ws = new WebSocket(wsUrl);
+            ws = new WebSocket(wsUrl);
             
             ws.onopen = () => {
                 console.log('WebSocket connected, registering as controller...');
+                reconnectAttempts = 0;
+                status.classList.remove('reconnecting');
+                
                 ws.send(JSON.stringify({
                     type: 'register',
-                    client: 'controller'
+                    client: 'controller',
+                    sessionId: sessionId
                 }));
             };
             
             ws.onclose = () => {
-                console.log('WebSocket disconnected');
-                status.textContent = 'Disconnected - Reconnecting...';
-                status.style.background = 'rgba(255,0,0,0.5)';
-                setTimeout(connectWebSocket, 3000);
+                status.textContent = 'Disconnected';
+                status.style.background = 'rgba(255,0,0,0.8)';
+                
+                if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    reconnectAttempts++;
+                    status.textContent = `Reconnecting (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`;
+                    status.classList.add('reconnecting');
+                    setTimeout(connectWebSocket, RECONNECT_DELAY);
+                } else {
+                    showError('Connection lost. Please refresh the page.');
+                }
             };
             
             ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
-                status.textContent = 'Connection error!';
-                status.style.background = 'rgba(255,0,0,0.5)';
+                status.textContent = 'Connection error';
+                status.style.background = 'rgba(255,0,0,0.8)';
             };
 
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 
                 if (data.type === 'registered') {
-                    status.textContent = `Connected as controller #${data.id}`;
-                    status.style.background = 'rgba(0,255,0,0.5)';
-                } else if (data.type === 'stats') {
-                    status.textContent = `Connected - Controllers: ${data.controllers}, Games: ${data.games}`;
+                    status.textContent = `Connected to session ${data.sessionId}`;
+                    status.style.background = 'rgba(0,255,0,0.8)';
+                } else if (data.type === 'session_status') {
+                    sessionInfo.textContent = `👥 Connected: ${data.controllers}`;
                 }
             };
-
-            return ws;
         }
 
-        const ws = connectWebSocket();
+        function createRipple(x, y) {
+            const ripple = document.createElement('div');
+            ripple.className = 'ripple';
+            ripple.style.left = x + 'px';
+            ripple.style.top = y + 'px';
+            touchpad.appendChild(ripple);
+            
+            ripple.addEventListener('animationend', () => ripple.remove());
+        }
 
         function sendInputData(eventType, x, y, isDrag = false) {
             const now = Date.now();
@@ -149,8 +290,8 @@
             
             // Show input point
             inputPoint.style.display = 'block';
-            inputPoint.style.left = (x - 20) + 'px';
-            inputPoint.style.top = (y - 20) + 'px';
+            inputPoint.style.left = x + 'px';
+            inputPoint.style.top = y + 'px';
             
             // Normalized coordinates
             const normalizedX = (x - rect.left) / rect.width;
@@ -159,18 +300,16 @@
             // Update debug info
             debugInfo.textContent = `X: ${Math.round(normalizedX * 100)}% Y: ${Math.round(normalizedY * 100)}%`;
             
-            // Send data
-            const data = {
-                type: eventType,
-                x: normalizedX,
-                y: normalizedY,
-                inputType: isTouch ? 'touch' : 'mouse',
-                isDragging: isDrag,
-                timestamp: Date.now()
-            };
-            
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify(data));
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: eventType,
+                    x: normalizedX,
+                    y: normalizedY,
+                    inputType: isTouch ? 'touch' : 'mouse',
+                    isDragging: isDrag,
+                    sessionId: sessionId,
+                    timestamp: now
+                }));
             }
         }
 
@@ -180,6 +319,7 @@
             isTouch = true;
             const touch = event.touches[0];
             sendInputData(event.type, touch.clientX, touch.clientY, true);
+            createRipple(touch.clientX, touch.clientY);
         }
 
         touchpad.addEventListener('touchstart', (e) => {
@@ -196,11 +336,12 @@
             touchpad.classList.remove('dragging');
             debugInfo.textContent = '';
             
-            if (ws.readyState === WebSocket.OPEN) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'touchend',
                     inputType: 'touch',
                     isDragging: false,
+                    sessionId: sessionId,
                     timestamp: Date.now()
                 }));
             }
@@ -212,6 +353,7 @@
             isTouch = false;
             touchpad.classList.add('dragging');
             sendInputData('mousedown', e.clientX, e.clientY, true);
+            createRipple(e.clientX, e.clientY);
             
             const handleMouseMove = (e) => {
                 if (isDragging) {
@@ -221,16 +363,16 @@
             
             const handleMouseUp = (e) => {
                 isDragging = false;
-                isTouch = false;
                 touchpad.classList.remove('dragging');
                 inputPoint.style.display = 'none';
                 debugInfo.textContent = '';
                 
-                if (ws.readyState === WebSocket.OPEN) {
+                if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({
                         type: 'mouseup',
                         inputType: 'mouse',
                         isDragging: false,
+                        sessionId: sessionId,
                         timestamp: Date.now()
                     }));
                 }
@@ -252,8 +394,12 @@
                 isDragging = false;
                 touchpad.classList.remove('dragging');
                 inputPoint.style.display = 'none';
+                debugInfo.textContent = '';
             }
         });
+
+        // Initialize controller
+        initializeController();
     </script>
 </body>
 </html>
